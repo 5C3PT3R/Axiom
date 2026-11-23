@@ -9,7 +9,7 @@ def _build_markdown(report: Report, store: EvidenceStore) -> str:
     """Build the human-readable Markdown report."""
 
     def cite(h: Hypothesis) -> str:
-        return " → ".join(h.chain) if h.chain else ""
+        return " → ".join(h.chain or h.evidence_ids)
 
     lines = [
         f"# Axiom Report — {report.date}",

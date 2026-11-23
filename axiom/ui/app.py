@@ -1,4 +1,4 @@
-"""Streamlit UI (M7): run list, report view, evidence behind every claim, eval dashboard.
+"""Streamlit UI: pick a run, read what happened and why in plain words, open the evidence if you want proof.
 
 Run with `axiom ui` (or `streamlit run axiom/ui/app.py`).
 """
@@ -8,9 +8,9 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Axiom", layout="wide")
-st.title("Axiom")
+st.set_page_config(page_title="Axiom", page_icon="🔎", layout="wide")
 RUNS, EVALS = Path("runs"), Path("eval/results")
+ICON = {"normal": "🟢", "anomaly": "🔴", "data_issue": "🟠"}
 
 
 def load(path: Path):
@@ -22,75 +22,127 @@ def run_dirs() -> list[Path]:
     return sorted(ds, key=lambda d: (d / "report.json").stat().st_mtime, reverse=True)
 
 
-def claim_view(h: dict, evidence: dict):
-    """One hypothesis: its statement, numbers, and every cited evidence record (query + result)."""
-    st.markdown(f"**{h['statement']}**")
-    st.caption(f"segment: {h['segment_filters'] or 'global'} | explains {h['contribution_pct']:.1f}% "
-               f"| chain: {' → '.join(h['chain'])}")
-    for eid in h["evidence_ids"]:
-        ev = evidence.get(eid)
-        if ev is None:
-            continue
-        with st.expander(f"{eid} · {ev['tool']}"):
-            st.write("params", ev["params"])
-            if ev.get("query"):
-                st.code(ev["query"], language="sql")
-            st.json(ev["result"], expanded=False)
+def seg(filters: dict) -> str:
+    return ", ".join(f"{k} = {v}" for k, v in filters.items()) or "the whole business"
 
 
-tab_runs, tab_eval = st.tabs(["Runs", "Eval"])
+def money(x) -> str:
+    return "–" if x is None else f"{x:,.0f}"
 
-with tab_runs:
-    runs = run_dirs()
-    if not runs:
-        st.info("No runs yet. Try `axiom run 2026-04-01`.")
+
+def show_evidence(ev: dict):
+    """One evidence record as a readable sentence or table; raw JSON only for tools without a view."""
+    r, p, tool = ev["result"], ev["params"], ev["tool"]
+    if tool == "drill_down" and "segments" in r:
+        st.caption(f"{p.get('metric')} split by **{p.get('dimension')}**"
+                   + (f" within {seg(p['filters'])}" if p.get("filters") else ""))
+        df = pd.DataFrame(r["segments"][:8])
+        df = pd.DataFrame({p.get("dimension", "segment"): df.segment, "normal day": df.baseline.round(2),
+                           "this day": df.value.round(2), "share of the change": (df.share * 100).round(1)})
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    elif tool == "decompose_metric":
+        st.caption(f"{p.get('metric')} broken into its parts")
+        rows = [{"part": c["metric"], "normal day": round(c["baseline"], 4), "this day": round(c["value"], 4),
+                 "share of the change": round(100 * c["share"], 1)} for c in r.get("children", [])]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True) if rows else st.write(
+            f"{p.get('metric')}: {r.get('value'):,.2f} vs {r.get('baseline'):,.2f} normally")
+    elif tool == "segment_contribution":
+        st.write(f"Revenue in **{seg(p['filters'])}** changed by {money(r['revenue_delta_in_segment'])} out of a "
+                 f"total change of {money(r['revenue_delta_total'])}: **{100 * r['share']:.1f}%** of it.")
+    elif tool == "check_traffic":
+        st.write(f"Sessions in {seg(p.get('filters') or {})}: {money(r['sessions'])} vs "
+                 f"{money(r['baseline'])} normally ({'normal' if r['within_normal'] else 'unusual'}).")
+    elif tool == "detect":
+        st.write(f"**{p['metric']}** was {r['value']:,.2f} vs {r['baseline']:,.2f} normally "
+                 f"({100 * r['pct_change']:+.1f}%, z = {r['z']:.1f}).")
     else:
-        rows = []
-        for d in runs:
-            r = load(d / "report.json")
-            rows.append({"run": d.name, "date": r["date"], "status": r["status"], "headline": r["headline"],
-                         "confidence": r["confidence"], "escalate": r["escalate"]})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        pick = st.selectbox("Open run", [d.name for d in runs])
-        d = RUNS / pick
-        report = load(d / "report.json")
-        evidence = {e["evidence_id"]: e for e in (load(d / "evidence.json") or [])}
-        left, right = st.columns([3, 2])
-        with left:
-            st.markdown((d / "report.md").read_text(encoding="utf-8"))
-        with right:
-            st.subheader("Evidence behind each claim")
-            if report.get("primary_cause"):
-                st.markdown("##### Primary cause")
-                claim_view(report["primary_cause"], evidence)
-            for h in report.get("secondary_causes", []):
-                st.markdown("##### Secondary cause")
-                claim_view(h, evidence)
-            for rj in report.get("rejected", []):
-                st.markdown("##### Rejected")
-                claim_view(rj["hypothesis"], evidence)
-                st.caption("; ".join(rj["reasons"]))
-            for name in ("dq", "detection", "critic", "meta"):
-                if (blob := load(d / f"{name}.json")) is not None:
-                    with st.expander(name):
-                        st.json(blob, expanded=False)
+        st.json(r, expanded=False)
 
-with tab_eval:
+
+def report_page(d: Path):
+    rep, ev = load(d / "report.json"), {e["evidence_id"]: e for e in (load(d / "evidence.json") or [])}
+    day, status = rep["date"], rep["status"]
+
+    if status == "normal":
+        st.header(f"🟢 All normal on {day}")
+        st.write("No key metric moved beyond its usual range. Nothing to do.")
+    elif status == "data_issue":
+        st.header(f"🟠 Data problem on {day}")
+        st.write("The data for this day looks broken, so Axiom did not analyse it (bad data gives wrong answers).")
+        for i in (load(d / "dq.json") or {}).get("issues", []):
+            st.write(f"- **{i['check']}**: {i['detail']}")
+    else:
+        st.header(f"🔴 {rep['headline']}")
+        st.caption(day)
+
+    if status != "normal":
+        a, b, c = st.columns(3)
+        a.metric("Confidence", f"{rep['confidence']:.0%}")
+        if rep.get("primary_cause"):
+            b.metric("Explained", f"{rep['primary_cause']['contribution_pct']:.0f}%")
+        c.metric("Alert", "Yes" if rep["escalate"] else "No")
+
+    h = rep.get("primary_cause")
+    if h:
+        st.subheader("Why")
+        st.success(f"**{h['statement']}**\n\nWhere: {seg(h['segment_filters'])}")
+        for s in rep.get("secondary_causes", []):
+            st.info(f"Also: {s['statement']} ({s['contribution_pct']:.0f}% of the change)")
+        if rep.get("unexplained_pct", 0) >= 1:
+            st.caption(f"{rep['unexplained_pct']:.0f}% of the change is not explained by any cause.")
+    if status != "normal":
+        st.subheader("What to do")
+        st.write(rep["recommended_action"])
+
+    if h:
+        with st.expander("🔍 Show the proof (every number comes from here)"):
+            for eid in h["evidence_ids"]:
+                if eid in ev:
+                    st.markdown(f"**{eid}**")
+                    show_evidence(ev[eid])
+    if rep.get("rejected"):
+        with st.expander("❌ Ideas that were checked and rejected"):
+            for r in rep["rejected"]:
+                st.write(f"- {r['hypothesis']['statement']} — {'; '.join(r['reasons'])}")
+    with st.expander("⚙️ Technical details"):
+        st.markdown((d / "report.md").read_text(encoding="utf-8"))
+        for name in ("dq", "detection", "investigation", "critic", "meta"):
+            if (blob := load(d / f"{name}.json")) is not None:
+                st.caption(name)
+                st.json(blob, expanded=False)
+
+
+def benchmark_page():
+    st.header("Benchmark")
+    st.write("How often each system finds the right cause on the simulator's 28 known incidents.")
     evs = sorted((d for d in EVALS.glob("*") if (d / "results.csv").exists()), reverse=True) if EVALS.exists() else []
     if not evs:
-        st.info("No eval yet. Try `axiom eval --scenarios all --systems stats_only`.")
-    else:
-        pick = st.selectbox("Eval run", [d.name for d in evs])
-        from axiom.eval import summarize
+        st.info("No benchmark yet. Try `axiom eval --systems stats_only`.")
+        return
+    from axiom.eval import summarize
 
-        df = pd.read_csv(EVALS / pick / "results.csv")
-        st.subheader("Summary by system")
-        summ = summarize(df)
-        st.dataframe(summ.round(3), use_container_width=True)
-        bars = summ[["acc@1", "acc@3", "numeric_hallucination"]]
-        try:
-            st.bar_chart(bars, stack=False)
-        except TypeError:  # Streamlit < 1.37 has no `stack` (and draws grouped bars for a single row)
-            st.bar_chart(bars.T)
-        st.subheader("All runs")
-        st.dataframe(df.drop(columns=["causes"]), use_container_width=True, hide_index=True)
+    s = summarize(pd.read_csv(st.selectbox("Benchmark run", evs, format_func=lambda p: p.name) / "results.csv"))
+    view = pd.DataFrame({"right cause first": s["acc@1"], "right cause in top 3": s["acc@3"],
+                         "catches real problems": s["det_recall"], "false alarms": s["false_positive_rate"],
+                         "made-up numbers": s["numeric_hallucination"], "runs": s["runs"]})
+    st.dataframe(view.round(2), use_container_width=True)
+    with st.expander("All metrics"):
+        st.dataframe(s.round(3), use_container_width=True)
+
+
+st.sidebar.title("🔎 Axiom")
+st.sidebar.caption("Finds out why your sales moved.")
+page = st.sidebar.radio("View", ["Reports", "Benchmark"], label_visibility="collapsed")
+if page == "Benchmark":
+    benchmark_page()
+else:
+    runs = run_dirs()
+    if not runs:
+        st.info("No reports yet. Try `axiom run 2026-04-01`.")
+    else:
+        labels = {}
+        for d in runs:
+            r = load(d / "report.json")
+            labels[d] = f"{ICON.get(r['status'], '⚪')} {r['date']} · {d.name}"
+        pick = st.sidebar.radio("Reports (newest first)", runs, format_func=labels.get)
+        report_page(pick)

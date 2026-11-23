@@ -143,7 +143,8 @@ class Orchestrator:
 
         confs = [verdicts[h.id].confidence for h in accepted if h.id in verdicts]
         confidence = sum(confs) / len(confs) if confs else 0.3 if accepted else 0.0
-        action = (self._suggest_action(primary.segment_filters) if primary
+        rev = next((a for a in self.anomalies if a.metric == "revenue"), top)
+        action = (self._suggest_action(primary.segment_filters, up=rev.pct_change > 0) if primary
                   else "Investigate further with detailed analysis.")
         return Report(
             run_id=self.run_id, date=day, status="anomaly", headline=headline, primary_cause=primary,
@@ -152,8 +153,11 @@ class Orchestrator:
             escalate=bool(confidence >= 0.5 and top.severity in ("medium", "high")))
 
     @staticmethod
-    def _suggest_action(segment_filters: dict) -> str:
+    def _suggest_action(segment_filters: dict, up: bool = False) -> str:
         seg = ", ".join(f"{k}={v}" for k, v in segment_filters.items()) or "the affected segment"
+        if up:  # a surge is not a failure: check it is real demand and can be served
+            return (f"Confirm the jump in {seg} is genuine demand (e.g., a large order, promotion or campaign) "
+                    "and that stock and fulfilment can keep up.")
         return f"Investigate {seg} for issues (e.g., payment failures, app bugs, inventory)."
 
 

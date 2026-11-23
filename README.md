@@ -68,7 +68,7 @@ scenario days marked.
 axiom run 2026-04-01                       # one day: DQ -> detect -> investigate -> critic -> report
 axiom eval --systems stats_only --seeds 42,43,44          # offline benchmark, no LLM
 axiom eval --scenarios S07,S11 --systems axiom,no_critic,baseline_a   # needs an LLM provider
-axiom ui                                   # Streamlit: runs, reports, evidence behind each claim, eval dashboard
+axiom ui                                   # Streamlit: plain-language report (why, what to do, proof) + benchmark
 axiom daily --data data/sim                # scheduled run for yesterday; Slack ping if AXIOM_SLACK_WEBHOOK is set
 axiom adapt-online-retail                  # real UCI Online Retail II data -> data/online_retail
 axiom adapt-olist path/to/olist_csvs       # Olist (Kaggle) CSVs -> data/olist
@@ -164,16 +164,38 @@ which could not complete enough runs to report. Run
 `axiom eval --systems axiom,no_critic,baseline_a,stats_only --seeds 42,43,44` with a provider that has
 capacity and paste the table here. Until then there is no evidence that Axiom beats Baseline A.
 
+What exists so far is a single-scenario live run (S11, electronics stock-out, `eval/results/live_llm_small/`):
+
+| System | Right cause first | Numbers in the answer not traceable to evidence |
+|---|---|---|
+| Axiom (LLM + Critic) | yes | 0 of 15 |
+| No-Critic | yes | 0 of 8 |
+| Baseline A (LLM writes pandas, free-text answer) | no (`event_type=view` first) | 3 of 19 |
+
 ### Real data: UCI Online Retail II
 
 [Online Retail II](https://archive.ics.uci.edu/dataset/502/online+retail+ii) is the actual transaction log of a UK
 online retailer, Dec 2009 to Dec 2011 (CC BY 4.0, no login). `axiom adapt-online-retail` turns it into 604 trading
-days; detection flags 81 of them. Two runs with the local Qwen 7B model:
+days; detection flags 81 of them. Three runs with the local Qwen 7B model:
 
 | Day | What moved | Axiom's answer | Check against the data |
 |---|---|---|---|
 | 2011-03-17 | revenue +57% (z=15) | bags category, 61% of the change | correct: bags £2.0k → £11.0k |
 | 2010-04-19 | revenue +71% (z=16) | broad traffic increase | partly: guest checkouts went £2.6k → £20.7k (96%), which the 7B model missed |
+| 2011-06-14 | nothing beyond its normal range | normal, no alert | correct |
+
+## UI
+
+`axiom ui` opens a Streamlit app. Pick a run in the sidebar and it reads like a short note: a 🟢/🟠/🔴 header,
+confidence and how much of the change is explained, **Why** (the accepted cause and its segment) and **What to do**
+(worded for a drop or a jump). The evidence behind every number is one click away under *Show the proof*, as
+readable tables; rejected ideas and the raw JSON are in their own expanders. A second page shows the benchmark
+with plain metric names.
+
+## Slides
+
+[docs/Axiom_Review1.pptx](docs/Axiom_Review1.pptx) is the project review deck (background, literature, problem,
+objectives, architecture, evaluation protocol, results, milestones, risks, references).
 
 ## Limitations
 

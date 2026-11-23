@@ -60,3 +60,19 @@ def test_malformed_model_output_is_coerced():
     out = baseline_a(Fake(), DATA, date(2026, 4, 1), EvidenceStore())
     assert out["status"] == "normal" and out["causes"][0]["filters"] == {}
     assert out["causes"][0]["contribution_pct"] is None
+
+
+def test_action_text_follows_direction():
+    from axiom.orchestrator import Orchestrator
+
+    assert "genuine demand" in Orchestrator._suggest_action({"category": "bags"}, up=True)
+    assert "payment failures" in Orchestrator._suggest_action({"category": "bags"}, up=False)
+
+
+def test_empty_statement_is_rejected():
+    from types import SimpleNamespace
+
+    from axiom.agents.investigation import _check
+
+    tools = SimpleNamespace(store=SimpleNamespace(items={"E001": None}))
+    assert "statement is empty" in _check({"statement": " ", "evidence_ids": ["E001"]}, tools)

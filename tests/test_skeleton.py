@@ -11,8 +11,8 @@ def test_report_defaults_reconcile():
     assert r.unexplained_pct == 100.0 and r.primary_cause is None
 
 
-def test_cli_stub():
-    # axiom run requires data/sim; without it, it exits with an error
-    res = CliRunner().invoke(app, ["run", "2026-05-14"])
+def test_cli_stub(tmp_path):
+    # axiom run requires data/sim; without it, it exits with an error. Output goes to tmp, not runs/.
+    res = CliRunner().invoke(app, ["run", "2026-05-14", "--out", str(tmp_path / "r")])
     # Should fail gracefully when data is missing
     assert res.exit_code in (0, 1)

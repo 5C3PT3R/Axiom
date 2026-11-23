@@ -124,7 +124,7 @@ def _clean(items) -> list[dict]:
 def _check(h: dict, tools: Tools) -> list[str]:
     """Problems with one submitted statement (unknown evidence, untraceable numbers)."""
     ids = [i for i in h.get("evidence_ids", []) if i in tools.store.items]
-    errs = []
+    errs = [] if h.get("statement", "").strip() else ["statement is empty"]
     if not ids:
         errs.append("cites no valid evidence_id")
     for bad in unsupported_numbers(h["statement"], tools.store, ids):
@@ -151,7 +151,8 @@ def _finalize(sub: dict, tools: Tools, day: date, baseline: str) -> Investigatio
             continue
         hyps.append(Hypothesis(
             id=f"H{i}", statement=h["statement"], segment_filters=h["segment_filters"],
-            chain=[e for e in h.get("chain", []) if e in tools.store.items],
+            # models often leave `chain` empty: fall back to the cited evidence so the report never shows a blank
+            chain=[e for e in h.get("chain", []) if e in tools.store.items] or ids + [c["evidence_id"]],
             contribution_pct=100 * min(max(c["result"]["share"], 0.0), 1.0),
             evidence_ids=ids + [c["evidence_id"]]))
     if (total := sum(h.contribution_pct for h in hyps)) > 100:  # overlapping segments: scale to 100%
