@@ -27,7 +27,8 @@ def _check_traffic(tools: Tools, filters: dict, day: date, baseline: str) -> dic
     return {
         "check": "traffic",
         "passed": traffic_ok,
-        "detail": f"sessions={'normal' if traffic_ok else 'DROPPED'} (z={r.get('z', 0):.2f})",
+        "detail": f"sessions={'normal' if traffic_ok else 'ROSE' if r.get('z', 0) > 0 else 'DROPPED'} "
+                  f"(z={r.get('z', 0):.2f})",
         "sessions": r.get("sessions"),
         "baseline": r.get("baseline"),
         "pct_change": r.get("pct_change"),
@@ -169,6 +170,31 @@ def _compute_confidence(checks: list[dict], contribution_pct: float, has_alterna
     return round(min(max(confidence, 0.0), 1.0), 2)
 
 
+VERDICT_SPEC = {
+    "name": "submit_verdicts",
+    "description": "Submit your verdicts for all hypotheses.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "hypothesis_id": {"type": "string"},
+                        "verdict": {"type": "string", "enum": ["accept", "revise", "reject"]},
+                        "reasons": {"type": "array", "items": {"type": "string"}},
+                        "revision_hint": {"type": "string"},
+                    },
+                    "required": ["hypothesis_id", "verdict", "reasons"]
+                }
+            }
+        },
+        "required": ["verdicts"]
+    }
+}
+
+
 # ----------------------------------------------------------------------------- #
 # LLM-based alternative search + verdict                                       #
 # ----------------------------------------------------------------------------- #
@@ -205,34 +231,10 @@ def _verdict_from_llm(client, messages: list, hypotheses: list[Hypothesis],
                       checks_by_id: dict[str, list[dict]], day: date,
                       rejected_alternatives: list[dict]) -> tuple[list[CriticVerdict], list[dict]]:
     """Ask the LLM to assign verdicts based on the pre-computed checks."""
-    verdict_spec = {
-        "name": "submit_verdicts",
-        "description": "Submit your verdicts for all hypotheses.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "verdicts": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "hypothesis_id": {"type": "string"},
-                            "verdict": {"type": "string", "enum": ["accept", "revise", "reject"]},
-                            "reasons": {"type": "array", "items": {"type": "string"}},
-                            "revision_hint": {"type": "string"},
-                        },
-                        "required": ["hypothesis_id", "verdict", "reasons"]
-                    }
-                }
-            },
-            "required": ["verdicts"]
-        }
-    }
-
     ctx = _context(day, hypotheses, checks_by_id, rejected_alternatives)
     messages = [{"role": "user", "content": ctx}]
 
-    resp = client.create(PROMPT, messages, [verdict_spec],
+    resp = client.create(PROMPT, messages, [VERDICT_SPEC],
                          {"type": "tool", "name": "submit_verdicts"})
     messages.append({"role": "assistant", "content": resp["content"]})
 

@@ -4,6 +4,7 @@ The LLM chooses what to explore and writes the statements. Code owns everything 
 evidence ids, contribution_pct, budgets, and rejection of anything uncited or with untraceable numbers.
 """
 import json
+import math
 from datetime import date
 from pathlib import Path
 
@@ -82,12 +83,24 @@ class InvestigationResult(BaseModel):
     dropped: list[str] = []  # reasons, for the audit trail
 
 
+def _round(x):
+    """Readable numbers for the model: 4 significant digits (whole units above 1000), NaN -> null."""
+    if isinstance(x, float):
+        return None if math.isnan(x) else round(x) if abs(x) >= 1000 else float(f"{x:.4g}")
+    if isinstance(x, dict):
+        return {k: _round(v) for k, v in x.items() if k not in ("count", "surprise")}
+    if isinstance(x, list):
+        return [_round(v) for v in x]
+    return x
+
+
 def _view(out: dict) -> str:
-    """What the LLM sees: the evidence record, with long segment lists trimmed."""
+    """What the LLM sees: the evidence record (rounded), with long segment lists trimmed.
+    The stored evidence keeps full precision, and the verifier's tolerance covers the rounding."""
     r = out["result"]
     if isinstance(r.get("segments"), list) and len(r["segments"]) > 10:
         r = {**r, "segments": r["segments"][:8] + r["segments"][-2:]}
-    text = json.dumps({"evidence_id": out["evidence_id"], "result": r}, default=str)
+    text = json.dumps({"evidence_id": out["evidence_id"], "result": _round(r)}, default=str)
     return text if len(text) <= 9000 else text[:9000] + "...[truncated]"
 
 

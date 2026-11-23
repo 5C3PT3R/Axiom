@@ -17,3 +17,11 @@ def test_convert_tiny_olist(tmp_path):
     events = pd.read_parquet(out / "events" / "2018-01-05.parquet")
     assert orders.amount.tolist() == [50.0] and len(events) == 5
     assert set(pd.read_parquet(out / "sessions" / "2018-01-05.parquet").country) == {"SP"}
+
+
+def test_online_retail_categories():
+    from axiom.ingestion.online_retail import _category
+
+    assert _category("WHITE HANGING HEART T-LIGHT HOLDER") == "lighting"
+    assert _category("JUMBO BAG RED RETROSPOT") == "bags"
+    assert _category("12345") == "other"

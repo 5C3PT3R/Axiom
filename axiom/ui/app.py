@@ -50,7 +50,7 @@ with tab_runs:
             r = load(d / "report.json")
             rows.append({"run": d.name, "date": r["date"], "status": r["status"], "headline": r["headline"],
                          "confidence": r["confidence"], "escalate": r["escalate"]})
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         pick = st.selectbox("Open run", [d.name for d in runs])
         d = RUNS / pick
         report = load(d / "report.json")
@@ -86,7 +86,11 @@ with tab_eval:
         df = pd.read_csv(EVALS / pick / "results.csv")
         st.subheader("Summary by system")
         summ = summarize(df)
-        st.dataframe(summ.round(3), width="stretch")
-        st.bar_chart(summ[["acc@1", "acc@3", "numeric_hallucination"]], stack=False)
+        st.dataframe(summ.round(3), use_container_width=True)
+        bars = summ[["acc@1", "acc@3", "numeric_hallucination"]]
+        try:
+            st.bar_chart(bars, stack=False)
+        except TypeError:  # Streamlit < 1.37 has no `stack` (and draws grouped bars for a single row)
+            st.bar_chart(bars.T)
         st.subheader("All runs")
-        st.dataframe(df.drop(columns=["causes"]), width="stretch", hide_index=True)
+        st.dataframe(df.drop(columns=["causes"]), use_container_width=True, hide_index=True)

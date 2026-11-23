@@ -95,8 +95,8 @@ class _Messages:
 
 
 class OpenAICompatAPI:
-    def __init__(self, base_url: str, api_key_env: str):
-        key = os.environ.get(api_key_env)
+    def __init__(self, base_url: str, api_key_env: str | None = None):
+        key = os.environ.get(api_key_env) if api_key_env else "local"  # local servers (Ollama) need no key
         if not key:
             raise RuntimeError(f"Set the {api_key_env} environment variable.")
         self.messages = _Messages(base_url, key)

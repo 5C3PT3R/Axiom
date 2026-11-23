@@ -29,17 +29,24 @@ def convert(src: Path, out: Path) -> int:
     df = (orders.merge(cust, on="customer_id").merge(pay, on="order_id").merge(items, on="order_id")
           .rename(columns={"customer_state": "country"}).fillna({"category": "unknown"}))
     df["session_id"] = "s_" + df.order_id
-    df["day"] = df.ts.dt.strftime("%Y-%m-%d")
+    return write_days(df, Path(out))
+
+
+def write_days(df: pd.DataFrame, out: Path) -> int:
+    """One completed order per session -> per-day sessions/events/orders parquet. `df` needs order_id,
+    session_id, ts, country, category, payment_method, amount, items (+ any CONST column it really has)."""
+    df = df.assign(day=df.ts.dt.strftime("%Y-%m-%d"))
+    const = {c: "n/a" for c in CONST if c not in df}
     for name in ("sessions", "events", "orders"):
-        (Path(out) / name).mkdir(parents=True, exist_ok=True)
+        (out / name).mkdir(parents=True, exist_ok=True)
     for day, d in df.groupby("day"):
-        sessions = d[["session_id", "ts", "country", "category"]].assign(**dict.fromkeys(CONST, "n/a"))
+        sessions = d[["session_id", "ts", "country", "category"] + [c for c in CONST if c in d]].assign(**const)
         events = pd.concat([d[["session_id", "ts", "category", "payment_method"]].assign(
             event_type=e, error_code=None,
             payment_method=lambda x, e=e: x.payment_method if e.startswith("payment") else None,
             event_id=lambda x, e=e: e + "_" + x.session_id) for e in FUNNEL], ignore_index=True)
-        sessions.to_parquet(Path(out) / "sessions" / f"{day}.parquet", index=False)
-        events.to_parquet(Path(out) / "events" / f"{day}.parquet", index=False)
+        sessions.to_parquet(out / "sessions" / f"{day}.parquet", index=False)
+        events.to_parquet(out / "events" / f"{day}.parquet", index=False)
         d[["order_id", "session_id", "ts", "payment_method", "amount", "items"]].to_parquet(
-            Path(out) / "orders" / f"{day}.parquet", index=False)
+            out / "orders" / f"{day}.parquet", index=False)
     return df.day.nunique()

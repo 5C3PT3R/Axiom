@@ -113,6 +113,38 @@ def adapt_olist(src: str, out: str = "data/olist"):
 
 
 @app.command()
+def adapt_online_retail(src: str = "data/raw/online_retail_ii/online_retail_II.xlsx",
+                        out: str = "data/online_retail"):
+    """Convert the UCI Online Retail II workbook (real UK retailer, 2009-2011) to Axiom's layout."""
+    from pathlib import Path
+
+    from axiom.ingestion.online_retail import convert
+
+    typer.echo(f"Wrote {convert(Path(src), Path(out))} days to {out}")
+
+
+@app.command()
+def train_data(seeds: int = 30, first_seed: int = 1000, out: str = "data/train"):
+    """Simulate random incidents and write expert trajectories to OUT/train.jsonl."""
+    from pathlib import Path
+
+    from axiom.train.teacher import build
+
+    typer.echo(build(list(range(first_seed, first_seed + seeds)), Path(out)))
+
+
+@app.command()
+def train(data: str = "data/train/train.jsonl", out: str = "models/axiom-lora", epochs: int = 2,
+          base: str = "Qwen/Qwen2.5-1.5B-Instruct"):
+    """LoRA fine-tune the local model (needs a CUDA GPU). Then set provider.type: local in settings.yaml."""
+    from pathlib import Path
+
+    from axiom.train.finetune import train as run
+
+    typer.echo(run(Path(data), Path(out), base, epochs))
+
+
+@app.command()
 def ui():
     """Open the Streamlit UI (run list, reports, evidence behind each claim, eval dashboard)."""
     import subprocess

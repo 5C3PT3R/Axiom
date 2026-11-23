@@ -9,6 +9,17 @@ from pathlib import Path
 
 from axiom.config import load_settings
 
+_LOADED: dict = {}
+
+
+def _local(adapter: str, base: str):
+    """One copy of the local model per process (the eval creates a client per run)."""
+    from axiom.llm.local import LocalAPI
+
+    if (adapter, base) not in _LOADED:
+        _LOADED[(adapter, base)] = LocalAPI(adapter, base)
+    return _LOADED[(adapter, base)]
+
 
 class LLMClient:
     def __init__(self, cache_dir: Path = Path("runs/llm_cache"), model: str | None = None,
@@ -16,7 +27,9 @@ class LLMClient:
         cfg = load_settings()
         self.model = model or cfg["model"]
         self.temperature = cfg["temperature"] if temperature is None else temperature
-        self.provider = cfg.get("provider")  # {base_url, api_key_env}; unset -> Anthropic
+        self.provider = cfg.get("provider")  # {base_url, api_key_env} | {type: local, adapter, base}
+        if self.provider and self.provider.get("type") == "local" and not model:
+            self.model = f"local:{self.provider['adapter']}"  # keeps local cache entries apart from API ones
         self.pricing = cfg.get("pricing") or {}  # {input_per_mtok, output_per_mtok}; unset -> cost None
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -37,10 +50,12 @@ class LLMClient:
             self.cache_hits += 1
             return json.loads(f.read_text())
         if self._api is None:
-            if self.provider:  # OpenAI-compatible endpoint from settings.yaml `provider`
+            if self.provider and self.provider.get("type") == "local":  # fine-tuned model on this machine
+                self._api = _local(self.provider["adapter"], self.provider["base"])
+            elif self.provider:  # OpenAI-compatible endpoint from settings.yaml `provider`
                 from axiom.llm.openai_compat import OpenAICompatAPI
 
-                self._api = OpenAICompatAPI(self.provider["base_url"], self.provider["api_key_env"])
+                self._api = OpenAICompatAPI(self.provider["base_url"], self.provider.get("api_key_env"))
             else:
                 import anthropic  # reads ANTHROPIC_API_KEY from the environment
 

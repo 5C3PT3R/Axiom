@@ -1,7 +1,11 @@
-model: deepseek-ai/DeepSeek-V4-Flash-0731
-# OpenAI-compatible endpoint (key read from the env var). Remove `provider` and set a claude-* model
-# above to use the Anthropic API instead.
-provider: {base_url: "https://inference.dahl.global/v1", api_key_env: DAHL_API_KEY}
+model: qwen2.5:7b
+# LLM backend. Default: a model running locally in Ollama (no API key, no cost).
+#   Dahl / any OpenAI-compatible API: model: deepseek-ai/DeepSeek-V4-Flash-0731,
+#     provider: {base_url: "https://inference.dahl.global/v1", api_key_env: DAHL_API_KEY}
+#   Fine-tuned local model (axiom train): provider: {type: local, adapter: models/axiom-lora,
+#     base: Qwen/Qwen2.5-1.5B-Instruct}
+#   Anthropic: remove `provider` and set a claude-* model.
+provider: {base_url: "http://localhost:11434/v1"}
 temperature: 0
 seed: 42
 detection:
