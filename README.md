@@ -9,7 +9,8 @@ evidence-backed hypotheses about the cause.
 
 > "Something changed. Figure out what happened, why it happened, and tell me whether I need to act."
 
-**Status:** M0–M5 complete. M4 investigation agent verified live on S11 (OpenAI-compatible provider, see HANDOFF §10). `axiom run` is wired to the full pipeline. See [Team](#team) for who owns what, [HANDOFF.md](HANDOFF.md) for detailed status and [PRD.md](PRD.md) for the full spec.
+**Status:** M0–M8 built. Runs fully offline on a local model (Qwen2.5 7B via Ollama, no API key) and has been
+run on a real dataset (UCI Online Retail II). A fine-tuning pipeline for a smaller custom model is included. See [Team](#team) for who owns what, [HANDOFF.md](HANDOFF.md) for detailed status and [PRD.md](PRD.md) for the full spec.
 
 ## How it works
 
@@ -49,6 +50,14 @@ ruff check .
 pytest
 ```
 
+The LLM steps run on a local model by default. Install [Ollama](https://ollama.com), then:
+
+```bash
+ollama pull qwen2.5:7b      # ~4.7 GB, runs on a 6 GB GPU
+axiom run 2026-04-01        # S11, electronics stock-out: ~4 min on an RTX 4050
+axiom ui                    # open http://localhost:8501
+```
+
 `simulate` options: `--days`, `--sessions` (per day, default 10k), `--seed`, `--no-plot`. It
 writes one parquet file per table per day, `ground_truth.json` and a `revenue.png` with the
 scenario days marked.
@@ -61,17 +70,35 @@ axiom eval --systems stats_only --seeds 42,43,44          # offline benchmark, n
 axiom eval --scenarios S07,S11 --systems axiom,no_critic,baseline_a   # needs an LLM provider
 axiom ui                                   # Streamlit: runs, reports, evidence behind each claim, eval dashboard
 axiom daily --data data/sim                # scheduled run for yesterday; Slack ping if AXIOM_SLACK_WEBHOOK is set
-axiom adapt-olist path/to/olist_csvs       # public dataset -> same parquet layout (data/olist)
+axiom adapt-online-retail                  # real UCI Online Retail II data -> data/online_retail
+axiom adapt-olist path/to/olist_csvs       # Olist (Kaggle) CSVs -> data/olist
+axiom train-data                           # random simulated incidents -> expert trajectories (data/train)
+axiom train                                # LoRA fine-tune Qwen2.5-1.5B on them (CUDA GPU, ~2-3 h)
 ```
 
 Schedule `axiom daily` with cron (`0 7 * * *`) or Windows Task Scheduler.
 
 ### LLM provider
 
-`config/settings.yaml` picks the model. With no `provider:` key it uses the Anthropic API
-(`ANTHROPIC_API_KEY`). With `provider: {base_url, api_key_env}` it talks to any OpenAI-compatible
-endpoint through [axiom/llm/openai_compat.py](axiom/llm/openai_compat.py); the key is read from the
-named environment variable and never stored in the repo.
+`config/settings.yaml` picks the model and backend:
+
+| Backend | Settings | Notes |
+|---|---|---|
+| **Ollama (default)** | `model: qwen2.5:7b`, `provider: {base_url: "http://localhost:11434/v1"}` | Local, free, no key |
+| Any OpenAI-compatible API | `provider: {base_url, api_key_env}` | Key read from the named env var, never stored |
+| Fine-tuned local model | `provider: {type: local, adapter: models/axiom-lora, base: Qwen/Qwen2.5-1.5B-Instruct}` | After `axiom train` |
+| Anthropic | remove `provider`, set a `claude-*` model | Needs `ANTHROPIC_API_KEY` |
+
+All backends go through the same tool-use loop ([axiom/llm/](axiom/llm/)) and the same response cache.
+
+### Training a custom model
+
+`axiom train-data` simulates 30 datasets with a random incident every 5 days (payment failures, traffic drops,
+funnel bugs, price changes, stock-outs, mix shifts, two-cause days). A teacher that knows the injected cause plays
+the investigation (the true dimensions plus decoys, so the model learns to read tool outputs) and the Critic
+verdict, writing the exact conversations the model will see. `axiom train` LoRA-fine-tunes Qwen2.5-1.5B on them;
+the loss is taken only on the model's own turns. The 28 hand-written scenarios are never used for training, so
+they stay a fair held-out test.
 
 ### Using the pieces from Python
 
@@ -91,8 +118,8 @@ anomalies = detect(data, day, tools.store)        # KPIs that moved, with eviden
 print(tools.find_causes(str(day)))                # deterministic tree walk + drill-down (Baseline C)
 ```
 
-To try the LLM investigation agent, set `ANTHROPIC_API_KEY` and call
-`axiom.agents.investigation.investigate(tools, LLMClient(), day, anomalies)`. The model is set in
+To run the LLM investigation agent directly, call
+`axiom.agents.investigation.investigate(tools, LLMClient(), day, anomalies)`; the backend comes from
 [config/settings.yaml](config/settings.yaml).
 
 ## Project layout
@@ -100,18 +127,19 @@ To try the LLM investigation agent, set `ANTHROPIC_API_KEY` and call
 | Path | What it is |
 |---|---|
 | `axiom/simulator/` | Synthetic data generator and scenario injector |
-| `axiom/ingestion/` | Per-day parquet files → DuckDB views |
+| `axiom/ingestion/` | Per-day parquet files → DuckDB views; Olist and Online Retail II adapters |
 | `axiom/quality/` | Data-quality checks: schema diff, volume, nulls, duplicates, category drift, tracking invariants |
 | `axiom/detection/` | Robust-z change detection against weekday and trailing-7-day baselines |
 | `axiom/analysis/` | Metric cube, metric-tree decomposition (LMDI), Simpson-safe drill-down, LLM-facing tools |
 | `axiom/evidence/` | Evidence store and numeric-hallucination verifier |
-| `axiom/llm/` | Anthropic client with a deterministic response cache and token tally |
-| `axiom/agents/` | Investigation agent (tool-use loop) and its prompt |
+| `axiom/llm/` | LLM client (response cache, token tally) with Anthropic, OpenAI-compatible/Ollama and fine-tuned local backends |
+| `axiom/agents/` | Investigation agent, Critic, report writer and their prompts |
+| `axiom/baselines/`, `axiom/eval/` | Baseline A, No-Critic and stats-only systems; benchmark harness |
+| `axiom/train/` | Random incidents, teacher trajectories and LoRA fine-tuning |
+| `axiom/ui/` | Streamlit app |
 | `config/` | Settings, registered schema, metric tree |
 | `scenarios/` | Scenario definitions (YAML) |
 | `tests/` | Pytest suite |
-
-`axiom/api`, `baselines`, `eval` and `ui` are placeholders for later milestones.
 
 ## Results
 
@@ -136,19 +164,32 @@ which could not complete enough runs to report. Run
 `axiom eval --systems axiom,no_critic,baseline_a,stats_only --seeds 42,43,44` with a provider that has
 capacity and paste the table here. Until then there is no evidence that Axiom beats Baseline A.
 
+### Real data: UCI Online Retail II
+
+[Online Retail II](https://archive.ics.uci.edu/dataset/502/online+retail+ii) is the actual transaction log of a UK
+online retailer, Dec 2009 to Dec 2011 (CC BY 4.0, no login). `axiom adapt-online-retail` turns it into 604 trading
+days; detection flags 81 of them. Two runs with the local Qwen 7B model:
+
+| Day | What moved | Axiom's answer | Check against the data |
+|---|---|---|---|
+| 2011-03-17 | revenue +57% (z=15) | bags category, 61% of the change | correct: bags £2.0k → £11.0k |
+| 2010-04-19 | revenue +71% (z=16) | broad traffic increase | partly: guest checkouts went £2.6k → £20.7k (96%), which the 7B model missed |
+
 ## Limitations
 
-- **No benchmark of the LLM systems yet** (above). The only live evidence is S11 on 2026-04-01: DeepSeek-V4-Flash
-  named `category=electronics`, matching the ground truth, with all cited numbers verified. MiniMax-M2.7 found the
-  same cause but its hypothesis was dropped by the numeric verifier.
-- **The Critic's real LLM verdict was never confirmed live**; when the model returns no verdict the hypothesis is
-  kept but flagged `UNREVIEWED` with confidence capped at 0.3.
+- **No full benchmark of the LLM systems yet** (above). Live evidence so far: S11 solved by DeepSeek-V4-Flash
+  (API) and by Qwen2.5 7B (local); a 2-scenario run is in `eval/results/live_llm_small/`.
+- **The Critic's verdict often doesn't arrive on Ollama**, which does not enforce a forced tool call; the hypothesis
+  is then kept but flagged `UNREVIEWED` with confidence capped at 0.3. The fine-tuned model is trained to answer it.
+- **The fine-tuned model is not trained yet** in this repo (no weights are committed); run `axiom train-data` and
+  `axiom train` on a CUDA GPU.
 - **Synthetic data.** All numbers above are on the simulator, whose scenarios the detector was tuned against.
   Scenarios with a true effect under ~6% (S02, S07, S08, S12) sit below the revenue noise floor ([D20](DECISIONS.md)).
 - **Stats-only misses two-dimension causes** (S01, S05) and second causes (S23); the strict metric reflects that.
 - **Contribution error is approximate** ([D30](DECISIONS.md)); per-segment ground truth is not stored.
-- **Olist adapter** has no sessions or funnel data, so traffic and conversion metrics are degenerate. It was tested on
-  a tiny fixture, not on the real download, and DQ thresholds are tuned for the simulator.
+- **Real datasets have no sessions, funnel or payment data** (Olist, Online Retail II), so traffic and conversion
+  metrics are degenerate there and only revenue, orders, AOV and their dimensions are meaningful. DQ thresholds are
+  tuned for the simulator.
 - **Baseline A sandbox** has no network or memory limit on Windows ([D29](DECISIONS.md)).
 - `config/` is read relative to the source tree, so Axiom only works from a checkout or editable install.
 
@@ -164,14 +205,15 @@ capacity and paste the table here. Until then there is no evidence that Axiom be
 - **M5** Critic agent (6 checks), report writer (Markdown + JSON), orchestrator with revise loop, `axiom run` wired
 - **M6** Baseline A (sandboxed pandas agent), No-Critic ablation, stats-only baseline, `axiom eval` harness
 - **M7** Streamlit UI, `axiom daily` scheduler entry point, Slack webhook
-- **M8 (partial)** Olist adapter, results and limitations write-up
+- **M8** Olist and Online Retail II adapters, real-data runs, results and limitations write-up
+- **Local model** Ollama backend (default), fine-tuning pipeline (`axiom train-data`, `axiom train`)
 
 ### Remaining work
 
 | Item | Scope |
 |---|---|
-| LLM benchmark | Run `axiom eval` for the three LLM systems and fill the results table; confirm the Critic live |
-| Real data | Run the Olist adapter on the real download and review DQ thresholds |
-| Cost | Set `pricing:` in `config/settings.yaml`; check the <= $0.50/run target |
+| Fine-tuned model | Run `axiom train-data` + `axiom train`, then benchmark it against Qwen 7B and stats-only |
+| LLM benchmark | Run `axiom eval` for the LLM systems on all 28 scenarios and fill the results table |
+| Real data | Review DQ thresholds on real data; try Olist (needs a Kaggle login) |
 
 Design decisions and their reasoning are logged in [DECISIONS.md](DECISIONS.md).
